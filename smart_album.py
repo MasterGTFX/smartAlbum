@@ -21,8 +21,7 @@ from config import (
     DEFAULT_MAX_GAP_DAYS, DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT
 )
 from helpers import cli_friendly_logging
-from media_parsers import extract_metadata, create_collage
-
+from media_parsers import extract_metadata, create_collage, import_media, identify_duplicates
 
 # Configure logging
 logging.basicConfig(
@@ -231,7 +230,8 @@ def determine_album(metadata, trips=None):
 
 def process_media(input_dir, output_dir=None, copy=False, trip_detection=True, max_gap_days=DEFAULT_MAX_GAP_DAYS,
                   include_videos=True, create_collages=True, collage_threshold=DEFAULT_COLLAGE_THRESHOLD,
-                  dont_use_ai=False, system_prompt=None, prompt=None, language=DEFAULT_LANGUAGE):
+                  dont_use_ai=False, system_prompt=None, prompt=None, language=DEFAULT_LANGUAGE,
+                  remove_duplicates=False):
     """
     Process photos and videos in a directory and organize them into albums.
     
@@ -248,6 +248,7 @@ def process_media(input_dir, output_dir=None, copy=False, trip_detection=True, m
         system_prompt (str, optional): Custom system prompt for the AI
         prompt (str, optional): Custom prompt for the AI
         language (str): Language for album names (default: English)
+        remove_duplicates (bool): Whether to identify and remove duplicate files
     
     Returns:
         dict: Summary of processing results
@@ -285,6 +286,18 @@ def process_media(input_dir, output_dir=None, copy=False, trip_detection=True, m
         'collages_created': 0
     }
 
+    # Optional: Remove duplicates before processing
+    if remove_duplicates:
+        logging.info("Identifying and removing duplicate files...")
+        dup_results = identify_duplicates(input_dir, remove=True)
+        logging.info(f"Found {dup_results['duplicate_sets']} sets of duplicates ({dup_results['duplicate_files']} files)")
+        logging.info(f"Removed {dup_results['deleted_files']} duplicate files")
+        
+        # Add duplicate info to results
+        results['duplicates_found'] = dup_results['duplicate_files']
+        results['duplicates_removed'] = dup_results['deleted_files']
+        results['duplicate_sets'] = dup_results['duplicate_sets']
+    
     # First pass: Collect all media metadata for trip detection
     logging.info("First pass: Collecting media metadata for analysis...")
     media_metadata = []
@@ -395,6 +408,7 @@ def process_media(input_dir, output_dir=None, copy=False, trip_detection=True, m
                 results['failed'] += 1
 
     # Third pass: Create collages for each album (if enabled or if AI processing is needed)
+    created_collage_paths = []
     if (create_collages or not dont_use_ai) and results['total_photos'] > 0:
         logging.info("Third pass: Creating collages for albums...")
         created_collage_paths = []  # Track collage paths for potential deletion
@@ -442,6 +456,7 @@ def process_media(input_dir, output_dir=None, copy=False, trip_detection=True, m
         logging.info(f"Deleted {deleted_count} collages")
 
     return results
+
 
 
 def revert_albums(albums_dir, target_dir=None, copy=False):
@@ -530,10 +545,10 @@ def revert_albums(albums_dir, target_dir=None, copy=False):
                 # Copy or move file
                 if copy:
                     shutil.copy2(file_path, dest_path)
-                    logging.info(f"  Copied {file_path.name} to {dest_path}")
+                    logging.debug(f"  Copied {file_path.name} to {dest_path}")
                 else:
                     shutil.move(file_path, dest_path)
-                    logging.info(f"  Moved {file_path.name} to {dest_path}")
+                    logging.debug(f"  Moved {file_path.name} to {dest_path}")
 
                 results['processed'] += 1
 
@@ -561,6 +576,8 @@ def main():
     parser.add_argument('input_dir', help='Directory containing media files')
     parser.add_argument('--output-dir', '-o', help='Output directory for albums (default: INPUT_DIR/Albums)')
     parser.add_argument('--copy', '-c', action='store_true', help='Copy files instead of moving them')
+    parser.add_argument('--from', '-f', dest='source_dirs', nargs='+', metavar='SOURCE_DIR',
+                        help='Import media files from SOURCE_DIR(s) to input_dir')
     parser.add_argument('--no-trip-detection', action='store_true',
                         help='Disable trip and event detection, use simple year-month organization')
     parser.add_argument('--max-gap-days', type=int, default=DEFAULT_MAX_GAP_DAYS,
@@ -581,9 +598,57 @@ def main():
                         help='Custom prompt for the AI')
     parser.add_argument('--language', type=str, default=DEFAULT_LANGUAGE,
                         help=f'Language for album names (default: {DEFAULT_LANGUAGE})')
+    parser.add_argument('--remove-duplicates', action='store_true',
+                        help='Identify and remove duplicate files based on content')
 
     args = parser.parse_args()
 
+    # Handle import mode - this runs before other operations
+    if args.source_dirs:
+        print(f"Importing media files from {len(args.source_dirs)} source directories to {args.input_dir}")
+        if args.copy:
+            print("Files will be copied (originals remain in source)")
+        else:
+            print("Files will be moved from source to destination")
+            
+        results = import_media(args.source_dirs, args.input_dir, args.copy)
+        
+        # Print summary
+        print("\nImport operation complete!")
+        print(f"Total media files found: {results['total_files']}")
+        print(f"Photos imported: {results['photos_imported']}")
+        print(f"Videos imported: {results['videos_imported']}")
+        if results['failed'] > 0:
+            print(f"Files failed: {results['failed']}")
+        if results['skipped'] > 0:
+            print(f"Files skipped: {results['skipped']}")
+            
+        # Ask if user wants to continue with organization
+        if input("\nContinue with organizing imported media? (y/n): ").lower() != 'y':
+            return
+
+    # Handle duplicate identification and removal
+    if args.remove_duplicates:
+        target = args.output_dir if args.output_dir and not args.revert else args.input_dir
+        print(f"Identifying duplicate files in {target}...")
+        
+        results = identify_duplicates(target, remove=True)
+        
+        # Print summary
+        print("\nDuplicate identification complete!")
+        print(f"Total files scanned: {results['total_files']}")
+        print(f"Unique files: {results['unique_files']}")
+        print(f"Duplicate sets found: {results['duplicate_sets']}")
+        print(f"Duplicate files: {results['duplicate_files']}")
+        
+        if results['deleted_files'] > 0:
+            print(f"Deleted duplicate files: {results['deleted_files']}")
+        
+        # Ask if user wants to continue with other operations
+        if args.revert or not args.output_dir:
+            if input("\nContinue with other operations? (y/n): ").lower() != 'y':
+                return
+    
     # Handle revert mode
     if args.revert:
         albums_dir = args.output_dir if args.output_dir else Path(args.input_dir) / 'Albums'
@@ -635,7 +700,7 @@ def main():
                                 trip_detection, args.max_gap_days, include_videos,
                                 create_collages, args.collage_threshold,
                                 args.no_ai, args.system_prompt, args.prompt,
-                                args.language)
+                                args.language, args.remove_duplicates)
 
         # Print summary
         print("\nProcessing complete!")
@@ -658,6 +723,12 @@ def main():
             if results.get('ai_failed', 0) > 0:
                 print(f"AI renaming failures: {results['ai_failed']}")
 
+        if args.remove_duplicates and 'duplicates_found' in results:
+            print(f"\nDuplicate detection:")
+            print(f"Duplicate sets found: {results['duplicate_sets']}")
+            print(f"Duplicate files found: {results['duplicates_found']}")
+            print(f"Duplicate files removed: {results['duplicates_removed']}")
+        
         if results['albums']:
             print("\nAlbums created:")
             for album, count in sorted(results['albums'].items()):

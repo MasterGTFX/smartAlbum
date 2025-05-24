@@ -38,10 +38,36 @@ Smart Album analyzes your media files and organizes them into albums based on me
 Basic usage:
 `python smart_album.py <path_to_media_directory>`
 
-Smart Album offers various command-line options to customize its behavior. 
-Run `python smart_album.py --help` for a full list of available commands and their descriptions.
+### Command-line Options
 
-## AI Feature Disclaimer
+Smart Album offers various command-line options to customize its behavior:
+
+#### Core Options:
+- `input_dir` - Directory containing media files (required)
+- `--output-dir`, `-o` - Output directory for albums (default: INPUT_DIR/Albums)
+- `--copy`, `-c` - Copy files instead of moving them
+- `--from`, `-f` - Import media files from SOURCE_DIR (and its subdirectories)
+
+#### Import and Organization:
+- `--revert` - Revert organization by moving files from albums back to root directory
+- `--no-videos` - Skip video files and only process photos
+- `--no-trip-detection` - Disable trip and event detection, use simple year-month organization
+- `--max-gap-days` - Maximum number of days between trips to merge them
+- `--remove-duplicates` - Identify and remove duplicate files based on content
+
+#### Album Creation:
+- `--no-collages` - Disable automatic collage creation for albums
+- `--collage-threshold` - Maximum number of photos per collage
+
+#### AI Options:
+- `--no_ai` - Skip AI-based album renaming
+- `--system-prompt` - Custom system prompt for the AI
+- `--prompt` - Custom prompt for the AI
+- `--language` - Language for album names (default: **English**)
+
+### Examples
+
+**Basic organization:**
 
 Please be aware that when using AI-powered features, such as album renaming, the relevant photos (collages created from your albums) will be sent to the Large Language Model (LLM) of your choice for processing. 
 Ensure you understand the privacy implications and use this feature wisely.
